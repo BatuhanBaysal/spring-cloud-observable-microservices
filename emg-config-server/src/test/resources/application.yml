@@ -1,0 +1,17 @@
+spring:
+  cloud:
+    config:
+      enabled: false
+  
+  main:
+    allow-bean-definition-overriding: true
+
+eureka:
+  client:
+    enabled: false 
+
+application:
+  security:
+    jwt:
+      secret-key: aGVyZSBhIGxvbmcgYW5kIHNlY3VyZSBzZWNyZXQga2V5IGZvciB5b3VyIHRlc3RpbmcgZW52aXJvbm1lbnQgcHVycG9zZXM=
+      expiration: 3600

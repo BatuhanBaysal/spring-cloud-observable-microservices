@@ -1,0 +1,20 @@
+server:
+  port: 8888
+
+spring:
+  application:
+    name: emg-config-server
+
+  cloud:
+    config:
+      server:
+        git:
+          uri: https://github.com/BatuhanBaysal/emg-config-repo.git
+          default-label: main
+    compatibility-verifier:
+      enabled: false
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka/
