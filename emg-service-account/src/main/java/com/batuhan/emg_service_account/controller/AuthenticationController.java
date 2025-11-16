@@ -1,9 +1,10 @@
 package com.batuhan.emg_service_account.controller;
 
-import com.batuhan.emg_service_account.dto.request.LoginRequest;
-import com.batuhan.emg_service_account.dto.response.AuthenticationResponse;
 import com.batuhan.emg_service_account.service.JwtService;
 import com.batuhan.emg_service_account.service.AccountServiceImpl;
+import com.batuhan.emg_service_account.dto.request.LoginRequest;
+import com.batuhan.emg_service_account.dto.response.AuthenticationResponse;
+
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
