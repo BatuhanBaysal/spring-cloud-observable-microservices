@@ -1,0 +1,168 @@
+version: '3.8'
+
+services:
+  postgres-db:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pgs1234
+      POSTGRES_DB: micro_account_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+
+
+  emg-redis:
+    image: redis:7.2-alpine
+    container_name: emg-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+    restart: always
+
+
+  eureka-server:
+    image: emg-eureka-server
+    container_name: eureka-server
+    build:
+      context: ./emg-eureka-server
+      dockerfile: Dockerfile
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_CLOUD_CONFIG_ENABLED=false
+      - MANAGEMENT_TRACING_ENABLED=false
+    depends_on:
+      zipkin:
+        condition: service_started
+    restart: on-failure
+
+
+  api-gateway:
+    image: emg-api-gateway
+    container_name: api-gateway
+    build:
+      context: ./emg-api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - APPLICATION_SECURITY_JWT_SECRET_KEY=UzpDUjNUX1BSMERfSU5UX0FVVEhfSzNZXzFUX0lTX1YzUllfTE9OR180NTg3REZHA==
+      - APPLICATION_SECURITY_JWT_EXPIRATION=86400000
+      - SPRING_DATA_REDIS_HOST=emg-redis
+      - MANAGEMENT_TRACING_ENABLED=false
+      - SPRING_CLOUD_CONFIG_ENABLED=false
+    depends_on:
+      eureka-server:
+        condition: service_started
+      emg-redis:
+        condition: service_healthy
+      zipkin:
+        condition: service_started
+    restart: on-failure
+
+
+  account-service:
+    image: emg-service-account
+    container_name: account-service
+    build:
+      context: ./emg-service-account
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    command: [ "sh", "-c", "sleep 15 && java -jar app.jar" ]
+    environment:
+      - DB_HOST=postgres-db
+      - ACCOUNT_DB_NAME=micro_account_db
+      - ACCOUNT_DB_USERNAME=postgres
+      - ACCOUNT_DB_PASSWORD=pgs1234
+      - APPLICATION_SECURITY_JWT_SECRET_KEY=UzpDUjNUX1BSMERfSU5UX0FVVEhfSzNZXzFUX0lTX1YzUllfTE9OR180NTg3REZHA==
+      - APPLICATION_SECURITY_JWT_EXPIRATION=86400000
+      - MANAGEMENT_TRACING_ENABLED=false
+      - SPRING_CLOUD_CONFIG_ENABLED=false
+    depends_on:
+      eureka-server:
+        condition: service_started
+      postgres-db:
+        condition: service_healthy
+      zipkin:
+        condition: service_started
+    restart: on-failure
+
+
+  product-service:
+    image: emg-service-product
+    container_name: product-service
+    build:
+      context: ./emg-service-product
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    command: [ "sh", "-c", "sleep 15 && java -jar app.jar" ]
+    environment:
+      - DB_HOST=postgres-db
+      - PRODUCT_DB_NAME=micro_account_db
+      - PRODUCT_DB_USERNAME=postgres
+      - PRODUCT_DB_PASSWORD=pgs1234
+      - APPLICATION_SECURITY_JWT_SECRET_KEY=UzpDUjNUX1BSMERfSU5UX0FVVEhfSzNZXzFUX0lTX1YzUllfTE9OR180NTg3REZHA==
+      - APPLICATION_SECURITY_JWT_EXPIRATION=86400000
+      - MANAGEMENT_TRACING_ENABLED=false
+      - SPRING_CLOUD_CONFIG_ENABLED=false
+    depends_on:
+      eureka-server:
+        condition: service_started
+      postgres-db:
+        condition: service_healthy
+      zipkin:
+        condition: service_started
+    restart: on-failure
+
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      eureka-server:
+        condition: service_started
+    restart: always
+
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: always
+
+volumes:
+  grafana-storage:
+  postgres-data:
