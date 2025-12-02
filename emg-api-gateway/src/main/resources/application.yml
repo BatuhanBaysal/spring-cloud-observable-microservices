@@ -1,0 +1,86 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: emg-api-gateway
+  data:
+    redis:
+      host: emg-redis
+      port: 6379
+  config:
+    import: []
+  cloud:
+    gateway:
+      server:
+        webflux:
+          discovery:
+            locator:
+              enabled: true
+      routes:
+        - id: auth-login-route
+          uri: lb://emg-service-account
+          predicates:
+            - Path=/api/account/login
+            - Method=POST
+          filters:
+            - AddRequestHeader=X-Internal-Secret, ${INTERNAL_ACCESS_SECRET}
+            - RewritePath=/api/account/login, /api/v1/auth/login
+
+        - id: account-service-route-general
+          uri: lb://emg-service-account
+          predicates:
+            - Path=/api/account/**
+          filters:
+            - name: AuthHeaderFilter
+            - name: CircuitBreaker
+              args:
+                name: accountCircuitBreaker
+                fallbackUri: forward:/fallback/accountFallback
+            - AddRequestHeader=X-Internal-Secret, ${INTERNAL_ACCESS_SECRET}
+            - RewritePath=/api/account(?<remaining>.*), /api${remaining}
+
+        - id: product-service-route
+          uri: lb://emg-service-product
+          predicates:
+            - Path=/api/product/**
+          filters:
+            - name: AuthHeaderFilter
+            - name: CircuitBreaker
+              args:
+                name: productCircuitBreaker
+                fallbackUri: forward:/fallback/productFallback
+            - AddRequestHeader=X-Internal-Secret, ${INTERNAL_ACCESS_SECRET}
+            - RewritePath=/api/product(?<remaining>.*), /api${remaining}
+
+eureka:
+  client:
+    register-with-eureka: false
+    fetch-registry: true
+    serviceUrl:
+      defaultZone: http://eureka-server:8761/eureka/
+  instance:
+    hostname: ${spring.application.name}
+    instance-id: ${spring.application.name}:${random.value}
+    initial-status-in-service: DOWN
+    lease-renewal-interval-in-seconds: 5
+    lease-expiration-duration-in-seconds: 10
+
+management:
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+    zipkin:
+      tracing:
+        endpoint: http://zipkin:9411/api/v2/spans
+  endpoints:
+    web:
+      exposure:
+        include: 'health,info,httptrace,prometheus'
+  health:
+    show-details: always
