@@ -10,6 +10,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -20,6 +22,7 @@ import java.security.Key;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import io.jsonwebtoken.io.Decoders;
@@ -27,6 +30,8 @@ import io.jsonwebtoken.security.Keys;
 
 @Component
 public class InternalAccessFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(InternalAccessFilter.class);
 
     private static final String INTERNAL_SECRET_HEADER = "X-Internal-Secret";
     private static final String AUTH_USER_HEADER = "X-Auth-User";
@@ -41,22 +46,38 @@ public class InternalAccessFilter extends OncePerRequestFilter {
 
     private Key signInKey;
 
+    private static final List<GrantedAuthority> INTERNAL_SUPER_AUTHORITIES = Arrays.asList(
+            new SimpleGrantedAuthority("ROLE_INTERNAL_ADMIN"),
+            new SimpleGrantedAuthority("product:read"),
+            new SimpleGrantedAuthority("product:create"),
+            new SimpleGrantedAuthority("product:update"),
+            new SimpleGrantedAuthority("product:delete")
+    );
+
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
 
         final String incomingSecret = request.getHeader(INTERNAL_SECRET_HEADER);
+        final String authHeader = request.getHeader(AUTH_HEADER);
+
         if (incomingSecret == null || !incomingSecret.equals(internalSecret)) {
             sendErrorResponse(response, "Access denied. Request did not originate from Gateway or provided wrong internal key.", HttpStatus.FORBIDDEN);
             return;
         }
 
-        final String authHeader = request.getHeader(AUTH_HEADER);
+        String username = null;
         Collection<? extends GrantedAuthority> authorities = Collections.emptyList();
-        String username = request.getHeader(AUTH_USER_HEADER);
 
-        if (authHeader != null && authHeader.startsWith(TOKEN_PREFIX)) {
+        if (authHeader == null || !authHeader.startsWith(TOKEN_PREFIX)) {
+            username = "SYSTEM_INTERNAL";
+            authorities = INTERNAL_SUPER_AUTHORITIES;
+            log.info("Direct Internal Access via 8082. Granting super authorities.");
+
+        } else {
             final String jwt = authHeader.substring(TOKEN_PREFIX.length());
+            username = request.getHeader(AUTH_USER_HEADER);
 
             try {
                 if (signInKey == null) {
@@ -77,20 +98,27 @@ public class InternalAccessFilter extends OncePerRequestFilter {
                             .map(SimpleGrantedAuthority::new)
                             .collect(Collectors.toList());
                 }
-                username = claims.getSubject();
+
+                if (claims.getSubject() != null && !claims.getSubject().isEmpty()) {
+                    username = claims.getSubject();
+                }
+
+                log.debug("Gateway Access. JWT validated for user: {}", username);
 
             } catch (Exception e) {
-                logger.warn("An error occurred while verifying the JWT: " + e.getMessage());
+                log.warn("An error occurred while verifying the JWT: " + e.getMessage());
             }
         }
 
-        if (username != null && !username.isEmpty()) {
+        if (username != null && !username.isEmpty() && !authorities.isEmpty()) {
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     username,
                     null,
                     authorities
             );
             SecurityContextHolder.getContext().setAuthentication(authentication);
+        } else if (authHeader != null && authHeader.startsWith(TOKEN_PREFIX)) {
+            log.warn("JWT provided but failed to extract valid user or authorities. Proceeding to chain.");
         }
 
         filterChain.doFilter(request, response);
