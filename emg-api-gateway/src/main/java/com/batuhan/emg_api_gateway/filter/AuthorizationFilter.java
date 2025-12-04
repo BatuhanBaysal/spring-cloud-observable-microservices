@@ -1,11 +1,9 @@
 package com.batuhan.emg_api_gateway.filter;
 
 import com.batuhan.emg_api_gateway.util.JwtValidator;
-import lombok.RequiredArgsConstructor;
-import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -14,75 +12,96 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Component
-@RequiredArgsConstructor
+@Slf4j
 public class AuthorizationFilter implements GlobalFilter, Ordered {
+
+    private static final String AUTHORIZATION_HEADER = "Authorization";
+    private static final String X_AUTH_USER = "X-Auth-User";
+    private static final String X_AUTH_AUTHORITIES = "X-Auth-Authorities";
 
     private final JwtValidator jwtValidator;
 
-    public static final List<String> COMPLETELY_OPEN_ENDPOINTS = List.of(
+    private static final List<String> PUBLIC_URLS = Arrays.asList(
             "/api/account/login",
-            "/api/account/v1/accounts"
+            "/api/account/register"
     );
 
-    public static final List<String> PUBLIC_GET_ENDPOINTS = List.of(
-            "/api/product/v1/products",
-            "/api/product/v1/products/"
-    );
+    public AuthorizationFilter(JwtValidator jwtValidator) {
+        this.jwtValidator = jwtValidator;
+    }
 
     @Override
-    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+    public Mono<Void> filter(ServerWebExchange exchange, org.springframework.cloud.gateway.filter.GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
-        String path = request.getPath().toString();
-        HttpMethod method = request.getMethod();
+        String path = request.getURI().getPath();
+        String method = request.getMethod().name();
 
-        boolean isCompletelyOpen = COMPLETELY_OPEN_ENDPOINTS.stream().anyMatch(path::equals);
-
-        if (isCompletelyOpen) {
+        if (shouldSkipFilter(path, method)) {
             return chain.filter(exchange);
         }
 
-        boolean isPublicGet = PUBLIC_GET_ENDPOINTS.stream().anyMatch(path::equals);
-
-        if (isPublicGet && method == HttpMethod.GET) {
-            return chain.filter(exchange);
+        if (!request.getHeaders().containsKey(AUTHORIZATION_HEADER)) {
+            log.warn("Authorization header missing for path: {}", path);
+            return this.onError(exchange, "Authorization header missing", HttpStatus.UNAUTHORIZED);
         }
 
-        if (!request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
-            return onError(exchange, "Authorization header missing", HttpStatus.UNAUTHORIZED);
-        }
+        final String authHeader = request.getHeaders().getFirst(AUTHORIZATION_HEADER);
+        String token;
 
-        String authHeader = request.getHeaders().get(HttpHeaders.AUTHORIZATION).get(0);
-        String jwt;
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            jwt = authHeader.substring(7);
+            token = authHeader.substring(7);
         } else {
-            return onError(exchange, "Bearer token format is invalid", HttpStatus.UNAUTHORIZED);
+            log.warn("Invalid Authorization header format.");
+            return this.onError(exchange, "Invalid Authorization header format", HttpStatus.UNAUTHORIZED);
         }
 
-        if (!jwtValidator.validateToken(jwt)) {
-            return onError(exchange, "JWT Token is invalid or expired", HttpStatus.UNAUTHORIZED);
+        if (!jwtValidator.validateToken(token)) {
+            log.warn("Invalid or expired JWT token for path: {}", path);
+            return this.onError(exchange, "Invalid or expired JWT token", HttpStatus.FORBIDDEN);
         }
 
-        String username = jwtValidator.extractUsername(jwt);
-        ServerHttpRequest modifiedRequest = request.mutate()
-                .header("X-Auth-User", username)
-                .build();
+        try {
+            String username = jwtValidator.extractUsername(token);
+            String authorities = jwtValidator.extractAuthorities(token);
 
-        return chain.filter(exchange.mutate().request(modifiedRequest).build());
+            ServerHttpRequest modifiedRequest = exchange.getRequest().mutate()
+                    .header(X_AUTH_USER, username)
+                    .header(X_AUTH_AUTHORITIES, authorities)
+                    .build();
+
+            return chain.filter(exchange.mutate().request(modifiedRequest).build());
+
+        } catch (Exception e) {
+            log.error("Error processing JWT: {}", e.getMessage());
+            return this.onError(exchange, "Error processing JWT", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private boolean shouldSkipFilter(String path, String method) {
+        if (PUBLIC_URLS.contains(path)) {
+            return true;
+        }
+
+        if (path.startsWith("/api/product/v1/products") && method.equalsIgnoreCase(HttpMethod.GET.name())) {
+            return true;
+        }
+
+        return false;
     }
 
     private Mono<Void> onError(ServerWebExchange exchange, String err, HttpStatus httpStatus) {
         ServerHttpResponse response = exchange.getResponse();
         response.setStatusCode(httpStatus);
-        response.getHeaders().add("Content-Type", "application/json");
+        log.error("Gateway Auth Error: {} - {}", httpStatus, err);
         return response.setComplete();
     }
 
     @Override
     public int getOrder() {
-        return -100;
+        return -1;
     }
 }
